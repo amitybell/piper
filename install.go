@@ -3,11 +3,13 @@ package piper
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 const (
@@ -59,49 +61,87 @@ func extractTar(rootDir, dstNm string, h *tar.Header, r io.Reader) (retErr error
 	return nil
 }
 
-func extractTarZst(dstDir string, srcFS fs.FS, srcPth string) error {
-	arcRd, err := srcFS.Open(srcPth)
+func rimraf(fn string) {
+	if !filepath.IsAbs(fn) {
+		panic(fn + ": is not absolute")
+	}
+	os.RemoveAll(fn)
+}
+
+func installArc(dstDir string, srcFS fs.FS) error {
+	dstDir = filepath.Clean(dstDir)
+	if !filepath.IsAbs(dstDir) {
+		return fmt.Errorf("installArc: `%s` is not absolute", dstDir)
+	}
+
+	alreadyInstalled, tmpDir, err := installHash(dstDir, srcFS)
 	if err != nil {
-		return fmt.Errorf("extractTarZst: open fs `%s`: %w", srcPth, err)
+		return fmt.Errorf("extract: Cannot create temp dir: %w", err)
+	}
+	if alreadyInstalled {
+		return nil
+	}
+	defer rimraf(tmpDir)
+
+	arcRd, err := srcFS.Open(distArcNm)
+	if err != nil {
+		return fmt.Errorf("installArc: open fs `%s`: %w", distArcNm, err)
 	}
 	defer arcRd.Close()
 
 	arc, err := openTarZst(arcRd)
 	if err != nil {
-		return fmt.Errorf("extractTarZst: open archive `%s`: %w", srcPth, err)
+		return fmt.Errorf("installArc: open archive `%s`: %w", distArcNm, err)
 	}
 	defer arc.Close()
 
 	for {
 		h, err := arc.Next()
-		switch {
-		case err == io.EOF:
-			return nil
-		case err != nil:
-			return fmt.Errorf("extractTarZst: archive next `%s`: %w", srcPth, err)
+		if errors.Is(err, io.EOF) {
+			break
 		}
-		if err := extractTar(dstDir, h.Name, h, arc); err != nil {
-			return fmt.Errorf("extractTarZst: archive next `%s`: %w", srcPth, err)
+		if err != nil {
+			return fmt.Errorf("installArc: iter `%s`: %w", distArcNm, err)
+		}
+		if err := extractTar(tmpDir, h.Name, h, arc); err != nil {
+			return fmt.Errorf("installArc: extract `%s`: %w", distArcNm, err)
 		}
 	}
+
+	bakDir := fmt.Sprintf("%s.%d.bak", dstDir, time.Now().UnixNano())
+	if err := os.Rename(dstDir, bakDir); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("extractTarZst: Cannot rename `%s` to `%s` %w", dstDir, bakDir, err)
+	}
+	if err := os.Rename(tmpDir, dstDir); err != nil {
+		os.Rename(bakDir, dstDir)
+		return fmt.Errorf("extractTarZst: Cannot rename `%s` to `%s` %w", tmpDir, dstDir, err)
+	}
+	rimraf(bakDir)
+	return nil
 }
 
-func installHash(dstDir string, srcFS fs.FS) (alreadyInstalled bool, err error) {
+func installHash(dstDir string, srcFS fs.FS) (alreadyInstalled bool, tmpDir string, err error) {
 	hashNm := "hash.txt"
-	dstFn := filepath.Join(dstDir, hashNm)
 	srcHash, err := fs.ReadFile(srcFS, hashNm)
 	if err != nil {
-		return false, fmt.Errorf("installHash: read hash file `fs://%s`: %w", hashNm, err)
+		return false, "", fmt.Errorf("installHash: Cannot read hash: %w", err)
 	}
-	dstHash, err := os.ReadFile(dstFn)
+
+	dstHash, err := os.ReadFile(filepath.Join(dstDir, hashNm))
 	if err == nil && bytes.Equal(dstHash, srcHash) {
-		return true, nil
+		return true, "", nil
 	}
-	os.MkdirAll(dstDir, 0755)
-	if err := os.WriteFile(dstFn, srcHash, 0644); err != nil {
-		return false, fmt.Errorf("installHash: write hash file `%s`: %w", dstFn, err)
+
+	tmpDir, err = os.MkdirTemp(filepath.Dir(dstDir), filepath.Base(dstDir))
+	if err != nil {
+		return false, "", fmt.Errorf("installHash: Cannot create temp dir: %w", err)
 	}
-	return false, nil
+
+	if err := os.WriteFile(filepath.Join(tmpDir, hashNm), srcHash, 0644); err != nil {
+		rimraf(tmpDir)
+		return false, "", fmt.Errorf("installHash: write hash file `%s`: %w", tmpDir, err)
+	}
+	return false, tmpDir, nil
 }
 
 func readModelCard(dir string) (string, error) {
@@ -116,19 +156,8 @@ func readModelCard(dir string) (string, error) {
 func installVoice(dstDir string, srcFS fs.FS) (desc, onnxFn, jsonFn string, err error) {
 	onnxFn = filepath.Join(dstDir, "voice.onnx")
 	jsonFn = filepath.Join(dstDir, "voice.json")
-	alreadyInstalled, err := installHash(dstDir, srcFS)
-	if err != nil {
-		return "", "", "", fmt.Errorf("installVoice: %w", err)
-	}
-	if alreadyInstalled {
-		s, err := readModelCard(dstDir)
-		if err == nil {
-			desc = s
-			return desc, onnxFn, jsonFn, nil
-		}
-	}
 
-	if err := extractTarZst(dstDir, srcFS, distArcNm); err != nil {
+	if err := installArc(dstDir, srcFS); err != nil {
 		return "", "", "", fmt.Errorf("installVoice: %w", err)
 	}
 
@@ -144,12 +173,7 @@ func installPiper(dataDir string) (exeFn string, err error) {
 	pkgDir := filepath.Join(dataDir, "piper-bin-"+piperAsset.Name)
 	exeFn = filepath.Join(pkgDir, piperExe)
 	defer os.Chmod(exeFn, 0755)
-	if ok, err := installHash(pkgDir, piperAsset.FS); err != nil {
-		return "", fmt.Errorf("installPiper: %w", err)
-	} else if ok {
-		return exeFn, nil
-	}
-	if err := extractTarZst(pkgDir, piperAsset.FS, distArcNm); err != nil {
+	if err := installArc(pkgDir, piperAsset.FS); err != nil {
 		return "", fmt.Errorf("installPiper: walk embedded fs: %w", err)
 	}
 	return exeFn, nil
