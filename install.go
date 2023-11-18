@@ -13,7 +13,8 @@ import (
 )
 
 const (
-	distArcNm = "dist.tar.zst"
+	DistArcName  = "dist.tzst"
+	DistMetaName = "dist.json"
 )
 
 func extractTar(rootDir, dstNm string, h *tar.Header, r io.Reader) (retErr error) {
@@ -74,7 +75,7 @@ func installArc(dstDir string, srcFS fs.FS) error {
 		return fmt.Errorf("installArc: `%s` is not absolute", dstDir)
 	}
 
-	alreadyInstalled, tmpDir, err := installHash(dstDir, srcFS)
+	alreadyInstalled, tmpDir, err := installMeta(dstDir, srcFS)
 	if err != nil {
 		return fmt.Errorf("extract: Cannot create temp dir: %w", err)
 	}
@@ -83,15 +84,15 @@ func installArc(dstDir string, srcFS fs.FS) error {
 	}
 	defer rimraf(tmpDir)
 
-	arcRd, err := srcFS.Open(distArcNm)
+	arcRd, err := srcFS.Open(DistArcName)
 	if err != nil {
-		return fmt.Errorf("installArc: open fs `%s`: %w", distArcNm, err)
+		return fmt.Errorf("installArc: open fs `%s`: %w", DistArcName, err)
 	}
 	defer arcRd.Close()
 
 	arc, err := openTarZst(arcRd)
 	if err != nil {
-		return fmt.Errorf("installArc: open archive `%s`: %w", distArcNm, err)
+		return fmt.Errorf("installArc: open archive `%s`: %w", DistArcName, err)
 	}
 	defer arc.Close()
 
@@ -101,10 +102,10 @@ func installArc(dstDir string, srcFS fs.FS) error {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("installArc: iter `%s`: %w", distArcNm, err)
+			return fmt.Errorf("installArc: iter `%s`: %w", DistArcName, err)
 		}
 		if err := extractTar(tmpDir, h.Name, h, arc); err != nil {
-			return fmt.Errorf("installArc: extract `%s`: %w", distArcNm, err)
+			return fmt.Errorf("installArc: extract `%s`: %w", DistArcName, err)
 		}
 	}
 
@@ -120,26 +121,25 @@ func installArc(dstDir string, srcFS fs.FS) error {
 	return nil
 }
 
-func installHash(dstDir string, srcFS fs.FS) (alreadyInstalled bool, tmpDir string, err error) {
-	hashNm := "hash.txt"
-	srcHash, err := fs.ReadFile(srcFS, hashNm)
+func installMeta(dstDir string, srcFS fs.FS) (alreadyInstalled bool, tmpDir string, err error) {
+	srcMeta, err := fs.ReadFile(srcFS, DistMetaName)
 	if err != nil {
-		return false, "", fmt.Errorf("installHash: Cannot read hash: %w", err)
+		return false, "", fmt.Errorf("installMeta: Cannot read meta: %w", err)
 	}
 
-	dstHash, err := os.ReadFile(filepath.Join(dstDir, hashNm))
-	if err == nil && bytes.Equal(dstHash, srcHash) {
+	dstMeta, err := os.ReadFile(filepath.Join(dstDir, DistMetaName))
+	if err == nil && bytes.Equal(dstMeta, srcMeta) {
 		return true, "", nil
 	}
 
 	tmpDir, err = os.MkdirTemp(filepath.Dir(dstDir), filepath.Base(dstDir))
 	if err != nil {
-		return false, "", fmt.Errorf("installHash: Cannot create temp dir: %w", err)
+		return false, "", fmt.Errorf("installMeta: Cannot create temp dir: %w", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(tmpDir, hashNm), srcHash, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpDir, DistMetaName), srcMeta, 0644); err != nil {
 		rimraf(tmpDir)
-		return false, "", fmt.Errorf("installHash: write hash file `%s`: %w", tmpDir, err)
+		return false, "", fmt.Errorf("installMeta: write meta file `%s`: %w", tmpDir, err)
 	}
 	return false, tmpDir, nil
 }
