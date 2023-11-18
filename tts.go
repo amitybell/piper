@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"github.com/adrg/xdg"
 	"github.com/amitybell/piper-asset"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -21,22 +24,43 @@ type TTS struct {
 }
 
 func (t *TTS) Synthesize(text string) (wav []byte, err error) {
+	stdoutFn := "-"
+	var stdout io.Writer
+	if runtime.GOOS != "windows" {
+		stdout = bytes.NewBuffer(nil)
+	} else {
+		tmpDir, err := os.MkdirTemp("", "ab-piper.")
+		if err != nil {
+			return nil, fmt.Errorf("TTS.Synthesize: Cannot create temp file: %w", err)
+		}
+		defer os.RemoveAll(tmpDir)
+		stdoutFn = filepath.Join(tmpDir, "tts.wav")
+	}
+
 	stdin := strings.NewReader(text)
-	stdout := bytes.NewBuffer(nil)
 	stderr := bytes.NewBuffer(nil)
 	cmd := exec.Command(t.piperExe,
 		"--model", t.onnxFn,
 		"--config", t.jsonFn,
-		"--output_file", "-")
+		"--output_file", stdoutFn)
 	cmd.Dir = t.piperDir
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.SysProcAttr = sysProcAttr
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("TextToSpeech: %s: %s: %s", cmd, err, stderr.Bytes())
+		return nil, fmt.Errorf("TTS.Synthesize: %s: %s: %s", cmd, err, stderr.Bytes())
 	}
-	return stdout.Bytes(), nil
+
+	if stdout != nil {
+		return stdout.(*bytes.Buffer).Bytes(), nil
+	}
+
+	wav, err = os.ReadFile(stdoutFn)
+	if err != nil {
+		return nil, fmt.Errorf("TTS.Synthesize: %s", err)
+	}
+	return wav, nil
 }
 
 func New(dataDir string, voice asset.Asset) (*TTS, error) {
