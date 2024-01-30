@@ -75,6 +75,8 @@ func installArc(dstDir string, srcFS fs.FS) error {
 		return fmt.Errorf("installArc: `%s` is not absolute", dstDir)
 	}
 
+	os.MkdirAll(filepath.Dir(dstDir), 0755)
+
 	alreadyInstalled, tmpDir, err := installMeta(dstDir, srcFS)
 	if err != nil {
 		return fmt.Errorf("extract: Cannot create temp dir: %w", err)
