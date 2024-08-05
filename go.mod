@@ -12,4 +12,7 @@ require (
 	github.com/klauspost/compress v1.17.3
 )
 
-require golang.org/x/sys v0.14.0 // indirect
+require (
+	github.com/nabbl/piper-bin-macos v0.0.0-20240805085459-7f1b1df8c68d // indirect
+	golang.org/x/sys v0.14.0 // indirect
+)

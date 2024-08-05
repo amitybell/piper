@@ -1,9 +1,11 @@
-//go:build macos
+//go:build darwin
 
 package piper
 
 import (
 	"syscall"
+
+	macos "github.com/nabbl/piper-bin-macos"
 )
 
 var (
