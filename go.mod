@@ -10,9 +10,7 @@ require (
 	github.com/amitybell/piper-voice-alan v0.0.0-20231030195550-66f4709c979b
 	github.com/amitybell/piper-voice-jenny v0.0.0-20231030195502-2afb5ebf3c45
 	github.com/klauspost/compress v1.17.3
+	github.com/nabbl/piper-bin-macos v0.0.0-20240805085459-7f1b1df8c68d
 )
 
-require (
-	github.com/nabbl/piper-bin-macos v0.0.0-20240805085459-7f1b1df8c68d // indirect
-	golang.org/x/sys v0.14.0 // indirect
-)
+require golang.org/x/sys v0.14.0 // indirect

@@ -1,11 +1,12 @@
 package piper
 
 import (
-	"github.com/amitybell/piper-asset"
-	"github.com/amitybell/piper-voice-alan"
-	"github.com/amitybell/piper-voice-jenny"
 	"os"
 	"testing"
+
+	asset "github.com/amitybell/piper-asset"
+	alan "github.com/amitybell/piper-voice-alan"
+	jenny "github.com/amitybell/piper-voice-jenny"
 )
 
 func TestPiper(t *testing.T) {
@@ -25,7 +26,7 @@ func TestPiper(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		wav, err := tts.Synthesize("hello world")
+		wav, err := tts.Synthesize("hello world", nil)
 		if err != nil {
 			t.Fatalf("%s: %s\n", name, err)
 		}
