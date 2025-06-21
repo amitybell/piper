@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	asset "github.com/amitybell/piper-asset"
 )
 
 const (
@@ -45,7 +47,7 @@ func extractTar(rootDir, dstNm string, h *tar.Header, r io.Reader) (retErr error
 			dstFn, h.Typeflag, tar.TypeDir, tar.TypeSymlink, tar.TypeReg)
 	}
 
-	os.MkdirAll(filepath.Dir(dstFn), 0755)
+	os.MkdirAll(filepath.Dir(dstFn), 0o755)
 	f, err := os.Create(dstFn)
 	if err != nil {
 		return fmt.Errorf("extract: create `%s`: %w", dstFn, err)
@@ -75,7 +77,7 @@ func installArc(dstDir string, srcFS fs.FS) error {
 		return fmt.Errorf("installArc: `%s` is not absolute", dstDir)
 	}
 
-	os.MkdirAll(filepath.Dir(dstDir), 0755)
+	os.MkdirAll(filepath.Dir(dstDir), 0o755)
 
 	alreadyInstalled, tmpDir, err := installMeta(dstDir, srcFS)
 	if err != nil {
@@ -139,7 +141,7 @@ func installMeta(dstDir string, srcFS fs.FS) (alreadyInstalled bool, tmpDir stri
 		return false, "", fmt.Errorf("installMeta: Cannot create temp dir: %w", err)
 	}
 
-	if err := os.WriteFile(filepath.Join(tmpDir, DistMetaName), srcMeta, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(tmpDir, DistMetaName), srcMeta, 0o644); err != nil {
 		rimraf(tmpDir)
 		return false, "", fmt.Errorf("installMeta: write meta file `%s`: %w", tmpDir, err)
 	}
@@ -155,26 +157,55 @@ func readModelCard(dir string) (string, error) {
 	return string(s), nil
 }
 
-func installVoice(dstDir string, srcFS fs.FS) (desc, onnxFn, jsonFn string, err error) {
-	onnxFn = filepath.Join(dstDir, "voice.onnx")
-	jsonFn = filepath.Join(dstDir, "voice.json")
-
-	if err := installArc(dstDir, srcFS); err != nil {
-		return "", "", "", fmt.Errorf("installVoice: %w", err)
+func findFn(dir string, pats ...string) (fn string, err error) {
+	for _, pat := range pats {
+		m, _ := filepath.Glob(filepath.Join(dir, pat))
+		if len(m) != 0 {
+			return m[0], nil
+		}
 	}
+	return "", fmt.Errorf("%s%v: %w", dir, pats, os.ErrNotExist)
+}
 
-	desc, err = readModelCard(dstDir)
+func configureExtractedVoice(dir string) (vc VoiceConfig, err error) {
+	vc.VoiceName = filepath.Base(dir)
+
+	vc.ModelFn, err = findFn(dir, "voice.onnx", "*.onnx")
 	if err != nil {
-		return "", "", "", fmt.Errorf("installVoice: %w", err)
+		return vc, fmt.Errorf("cannot find model: %w", err)
 	}
 
-	return desc, onnxFn, jsonFn, nil
+	vc.ConfigFn, err = findFn(dir, "voice.json", "*.onnx.json")
+	if err != nil {
+		return vc, fmt.Errorf("cannot find model config: %w", err)
+	}
+
+	// MODEL_CARD is only used for display; it's fine if we can't load it
+	vc.ModelCard, _ = readModelCard(dir)
+
+	return vc, nil
+}
+
+func installEmbeddedVoice(dataDir string, va asset.Asset) (vc VoiceConfig, err error) {
+	dir := filepath.Join(dataDir, "piper-voice-"+va.Name)
+
+	if err := installArc(dir, va.FS); err != nil {
+		return vc, fmt.Errorf("installVoice: %w", err)
+	}
+
+	vc, err = configureExtractedVoice(dir)
+	if err != nil {
+		return vc, err
+	}
+
+	vc.VoiceName = va.Name
+	return vc, nil
 }
 
 func installPiper(dataDir string) (exeFn string, err error) {
 	pkgDir := filepath.Join(dataDir, "piper-bin-"+piperAsset.Name)
 	exeFn = filepath.Join(pkgDir, piperExe)
-	defer os.Chmod(exeFn, 0755)
+	defer os.Chmod(exeFn, 0o755)
 	if err := installArc(pkgDir, piperAsset.FS); err != nil {
 		return "", fmt.Errorf("installPiper: walk embedded fs: %w", err)
 	}

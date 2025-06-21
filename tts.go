@@ -3,24 +3,37 @@ package piper
 import (
 	"bytes"
 	"fmt"
-	"github.com/adrg/xdg"
-	"github.com/amitybell/piper-asset"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/adrg/xdg"
+	asset "github.com/amitybell/piper-asset"
 )
 
-type TTS struct {
-	ModelCard string
+type VoiceConfig struct {
 	VoiceName string
+	ModelCard string
+	ModelFn   string
+	ConfigFn  string
+}
 
-	onnxFn   string
-	jsonFn   string
-	piperExe string
-	piperDir string
+type TTS struct {
+	VoiceConfig
+
+	piperExe  string
+	piperDir  string
+	espeakDir string
+}
+
+func (t *TTS) String() string {
+	if t == nil {
+		return "<TTS>"
+	}
+	return t.VoiceName
 }
 
 func (t *TTS) Synthesize(text string) (wav []byte, err error) {
@@ -40,9 +53,11 @@ func (t *TTS) Synthesize(text string) (wav []byte, err error) {
 	stdin := strings.NewReader(text)
 	stderr := bytes.NewBuffer(nil)
 	cmd := exec.Command(t.piperExe,
-		"--model", t.onnxFn,
-		"--config", t.jsonFn,
-		"--output_file", stdoutFn)
+		"--model", relPath(t.piperDir, t.ModelFn),
+		"--config", relPath(t.piperDir, t.ConfigFn),
+		"--espeak_data", relPath(t.piperDir, t.espeakDir),
+		"--output_file", stdoutFn,
+	)
 	cmd.Dir = t.piperDir
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
@@ -63,7 +78,7 @@ func (t *TTS) Synthesize(text string) (wav []byte, err error) {
 	return wav, nil
 }
 
-func New(dataDir string, voice asset.Asset) (*TTS, error) {
+func newTTS(dataDir string, configureVoice func(dataDir string) (VoiceConfig, error)) (*TTS, error) {
 	if dataDir == "" {
 		dir, err := xdg.DataFile("ab-piper")
 		if err != nil {
@@ -72,21 +87,47 @@ func New(dataDir string, voice asset.Asset) (*TTS, error) {
 		dataDir = dir
 	}
 
-	desc, onnxFn, jsonFn, err := installVoice(filepath.Join(dataDir, "piper-voice-"+voice.Name), voice.FS)
+	vc, err := configureVoice(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("piper.Install: cannot install piper voice: %w", err)
 	}
+
 	exeFn, err := installPiper(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("piper.Install: cannot install piper binary: %w", err)
 	}
+	piperDir := filepath.Dir(exeFn)
+
 	t := &TTS{
-		ModelCard: desc,
-		VoiceName: voice.Name,
-		onnxFn:    onnxFn,
-		jsonFn:    jsonFn,
-		piperDir:  filepath.Dir(exeFn),
-		piperExe:  exeFn,
+		VoiceConfig: vc,
+		piperDir:    piperDir,
+		piperExe:    exeFn,
+		espeakDir:   filepath.Join(piperDir, "espeak-ng-data"),
 	}
 	return t, nil
+}
+
+func NewEmbedded(piperDir string, va asset.Asset) (*TTS, error) {
+	return newTTS(piperDir, func(piperDir string) (VoiceConfig, error) {
+		return installEmbeddedVoice(piperDir, va)
+	})
+}
+
+// DEPRECATED: use NewEmbedded instead
+func New(piperDir string, va asset.Asset) (*TTS, error) {
+	return NewEmbedded(piperDir, va)
+}
+
+func NewExtracted(piperDir string, voiceDir string) (*TTS, error) {
+	return newTTS(piperDir, func(piperDir string) (VoiceConfig, error) {
+		return configureExtractedVoice(voiceDir)
+	})
+}
+
+func relPath(rootDir, fn string) string {
+	rel, err := filepath.Rel(rootDir, fn)
+	if err != nil {
+		return fn
+	}
+	return rel
 }
